@@ -3,17 +3,17 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.aayush.bt-audio-release</string>
+    <string>com.user.bt-audio-release</string>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/aayushgupta/.local/bin/bt-audio-release.sh</string>
+        <string>HOMEDIR/.local/bin/bt-audio-release.sh</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardErrorPath</key>
-    <string>/Users/aayushgupta/.local/bt-audio-release-stderr.log</string>
+    <string>HOMEDIR/.local/bt-audio-release-stderr.log</string>
 </dict>
 </plist>
