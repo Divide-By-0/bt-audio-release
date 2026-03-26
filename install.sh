@@ -1,14 +1,19 @@
 #!/bin/bash
 # Install bt-audio-release: auto-disconnect BT headphones when idle,
-# auto-reconnect when audio plays or lid opens.
+# auto-reconnect when lid opens.
 
 set -e
 
 echo "Installing dependencies..."
 brew install blueutil nowplaying-cli switchaudio-osx 2>/dev/null || true
 
-echo "Installing script..."
+echo "Building bt-kill-a2dp (Swift CLI)..."
+cd bt-kill-a2dp && swift build -c release && cd ..
 mkdir -p ~/.local/bin
+cp bt-kill-a2dp/.build/release/bt-kill-a2dp ~/.local/bin/bt-kill-a2dp
+chmod +x ~/.local/bin/bt-kill-a2dp
+
+echo "Installing script..."
 cp bt-audio-release.sh ~/.local/bin/bt-audio-release.sh
 chmod +x ~/.local/bin/bt-audio-release.sh
 
