@@ -133,6 +133,7 @@ func usage() -> Never {
       --speakers <name>   Built-in speaker name (default: "MacBook Air Speakers")
       --force             Disconnect BT entirely to guarantee A2DP release
       --mute              Mute output after switching (avoids race with external mute)
+      --is-active         Exit 0 if device has active audio output, 1 if idle
       --status            Print device state without changing anything
       -h, --help          Show this help
 
@@ -144,6 +145,7 @@ var macAddress = ""
 var speakerName = "MacBook Air Speakers"
 var force = false
 var muteAfterSwitch = false
+var checkActive = false
 var statusOnly = false
 
 do {
@@ -162,9 +164,10 @@ do {
                 exit(1)
             }
             speakerName = args[i]
-        case "--force":  force = true
-        case "--mute":   muteAfterSwitch = true
-        case "--status": statusOnly = true
+        case "--force":     force = true
+        case "--mute":      muteAfterSwitch = true
+        case "--is-active": checkActive = true
+        case "--status":    statusOnly = true
         case "-h", "--help": usage()
         default:
             fputs("Unknown option: \(args[i])\n", stderr)
@@ -194,6 +197,21 @@ if statusOnly {
     print("Default output:  \(isBTDefault) (current: \(curDefaultName))")
     print("Active IO:       \(btRunning)")
     exit(0)
+}
+
+// MARK: - Active check mode
+//
+// NOTE: Uses kAudioDevicePropertyDeviceIsRunningSomewhere which asks CoreAudio
+// directly whether any process has an active IO proc on this device. This is
+// far more reliable than nowplaying-cli, which reports playbackRate=1 for any
+// media session (e.g. a video "playing" in a tab with no actual audio output).
+
+if checkActive {
+    if btAudioID != nil, btRunning {
+        exit(0)  // active
+    } else {
+        exit(1)  // idle (or device not found)
+    }
 }
 
 // MARK: - Step 1: Switch output to speakers

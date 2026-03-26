@@ -83,17 +83,33 @@ while true; do
         LID_CLOSED=1
     fi
 
-    # --- Check if audio is playing ---
-    # nowplaying-cli returns "1" for playing, "0" for paused, "null"/empty for nothing
-    PLAYBACK_RATE=$(nowplaying-cli get playbackRate 2>/dev/null)
+    # --- Check if audio is actually playing ---
+    # NOTE: We check CoreAudio directly (via bt-kill-a2dp --is-active) instead
+    # of nowplaying-cli. nowplaying-cli reports playbackRate=1 for any media
+    # session (e.g. a paused video tab) even when no audio is being output.
+    # CoreAudio's kAudioDevicePropertyDeviceIsRunningSomewhere is authoritative.
     AUDIO_PLAYING=0
-    if [ "$PLAYBACK_RATE" = "1" ]; then
+
+    # Check each connected BT audio device for active IO
+    CONNECTED_FOR_CHECK=$(get_connected_audio_devices)
+    if [ -n "$CONNECTED_FOR_CHECK" ]; then
+        echo "$CONNECTED_FOR_CHECK" | while IFS='|' read -r addr name; do
+            [ -z "$addr" ] && continue
+            if "$HOME/.local/bin/bt-kill-a2dp" "$addr" --is-active 2>/dev/null; then
+                date +%s > "$STATE_FILE"
+                # NOTE: Signal to the outer shell via a temp file since this
+                # runs in a subshell (piped while loop)
+                touch /tmp/bt-audio-release-playing
+            fi
+        done
+    fi
+    if [ -f /tmp/bt-audio-release-playing ]; then
         AUDIO_PLAYING=1
-        date +%s > "$STATE_FILE"
+        rm -f /tmp/bt-audio-release-playing
     fi
 
     # Also check pmset for active audio OUTPUT assertions (catches Zoom, Meet, etc.
-    # that don't report to Now Playing). Look for "output" streams specifically.
+    # that use audio but aren't the CoreAudio default output device)
     if pmset -g assertions 2>/dev/null | grep -q "com.apple.audio.*:output"; then
         AUDIO_PLAYING=1
         date +%s > "$STATE_FILE"
