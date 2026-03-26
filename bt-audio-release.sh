@@ -123,6 +123,13 @@ while true; do
     AUDIO_OUTPUTS=$(SwitchAudioSource -a -t output 2>/dev/null)
     CURRENT_OUTPUT=$(SwitchAudioSource -c -t output 2>/dev/null)
 
+    # Periodic status line so `tail -f` shows what's happening
+    if [ "$AUDIO_PLAYING" -eq 1 ]; then
+        log "status: audio active | output=$CURRENT_OUTPUT | lid=$([ "$LID_CLOSED" -eq 1 ] && echo closed || echo open)"
+    else
+        log "status: idle ${IDLE_SECS}s/${IDLE_TIMEOUT}s | output=$CURRENT_OUTPUT | lid=$([ "$LID_CLOSED" -eq 1 ] && echo closed || echo open)"
+    fi
+
     # --- Detect lid just opened ---
     LID_JUST_OPENED=0
     if [ "$PREV_LID_CLOSED" -eq 1 ] && [ "$LID_CLOSED" -eq 0 ]; then
