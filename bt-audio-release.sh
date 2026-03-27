@@ -137,16 +137,19 @@ while true; do
     fi
     PREV_LID_CLOSED=$LID_CLOSED
 
-    # --- Auto-restore: only on lid open ---
-    # NOTE: We intentionally do NOT restore when audio starts playing.
-    # New audio goes to the muted speakers so the headphones stay free
-    # for the phone. Only lid-open means the user is back at the Mac.
+    # --- Auto-restore: on lid open or real audio playing ---
+    # NOTE: AUDIO_PLAYING is now based on CoreAudio active IO (not nowplaying-cli),
+    # so this only triggers when actual audio data is flowing — not for phantom
+    # media sessions like a paused video tab.
     SHOULD_RESTORE=0
     RESTORE_REASON=""
     if [ "$LID_CLOSED" -eq 0 ] && { [ -f "$RELEASED_FILE" ] || [ -f "$DISCONNECTED_FILE" ]; }; then
         if [ "$LID_JUST_OPENED" -eq 1 ]; then
             SHOULD_RESTORE=1
             RESTORE_REASON="lid opened"
+        elif [ "$AUDIO_PLAYING" -eq 1 ]; then
+            SHOULD_RESTORE=1
+            RESTORE_REASON="audio started playing"
         fi
     fi
 
