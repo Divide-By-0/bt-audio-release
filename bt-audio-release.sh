@@ -72,6 +72,11 @@ date +%s > "$STATE_FILE"
 # something the user manually changed before reboot
 rm -f "$RELEASED_FILE" "$DISCONNECTED_FILE"
 PREV_LID_CLOSED=0
+# NOTE: Require two consecutive idle polls before releasing. Guards against a
+# single poll missing audio detection (CoreAudio's IsRunningSomewhere can be
+# briefly false during buffering/silence, and pmset output assertions don't
+# fire for every source) right as the idle timer crosses the threshold.
+IDLE_STREAK=0
 log "Started bt-audio-release daemon (idle_timeout=${IDLE_TIMEOUT}s, poll=${POLL_INTERVAL}s)"
 
 while true; do
@@ -118,6 +123,14 @@ while true; do
     LAST_PLAYING=$(cat "$STATE_FILE" 2>/dev/null || date +%s)
     NOW=$(date +%s)
     IDLE_SECS=$((NOW - LAST_PLAYING))
+
+    # NOTE: Track consecutive idle polls so a single detection miss can't
+    # trigger a release right as IDLE_SECS tips past IDLE_TIMEOUT.
+    if [ "$AUDIO_PLAYING" -eq 1 ]; then
+        IDLE_STREAK=0
+    else
+        IDLE_STREAK=$((IDLE_STREAK + 1))
+    fi
 
     # --- Get list of audio output device names (used by is_audio_device) ---
     AUDIO_OUTPUTS=$(SwitchAudioSource -a -t output 2>/dev/null)
@@ -194,7 +207,7 @@ while true; do
     fi
 
     # --- Idle audio: switch output to speakers (release A2DP stream) ---
-    if [ "$AUDIO_PLAYING" -eq 0 ] && [ "$IDLE_SECS" -ge "$IDLE_TIMEOUT" ] && [ "$LID_CLOSED" -eq 0 ]; then
+    if [ "$AUDIO_PLAYING" -eq 0 ] && [ "$IDLE_SECS" -ge "$IDLE_TIMEOUT" ] && [ "$IDLE_STREAK" -ge 2 ] && [ "$LID_CLOSED" -eq 0 ]; then
         # Only act if current output is a BT audio device
         CONNECTED_AUDIO=$(get_connected_audio_devices)
         if [ -n "$CONNECTED_AUDIO" ]; then
@@ -203,12 +216,22 @@ while true; do
                 # NOTE: Only release if this BT device is the current output
                 if [ "$CURRENT_OUTPUT" = "$name" ]; then
                     CURRENT_VOL=$(osascript -e 'output volume of (get volume settings)' 2>/dev/null)
-                    echo "$addr|$name|$CURRENT_VOL" > "$RELEASED_FILE"
-                    log "Releasing audio stream from '$name' — idle for ${IDLE_SECS}s (switching to speakers)"
+                    # NOTE: With --force we fully disconnect BT, so record it
+                    # as DISCONNECTED (not RELEASED) — the restore path keys
+                    # off which file exists to decide whether to call
+                    # `blueutil --connect` before switching output. Writing
+                    # RELEASED_FILE here caused restore to skip the reconnect
+                    # and leave audio stuck on the laptop speakers until
+                    # macOS auto-reconnected the headphones a few seconds
+                    # later, which looked like a brief disconnect mid-video.
                     FORCE_FLAG=""
                     if [ "$BT_FORCE_RELEASE" -eq 1 ]; then
                         FORCE_FLAG="--force"
+                        echo "$addr|$name|$CURRENT_VOL" > "$DISCONNECTED_FILE"
+                    else
+                        echo "$addr|$name|$CURRENT_VOL" > "$RELEASED_FILE"
                     fi
+                    log "Releasing audio stream from '$name' — idle for ${IDLE_SECS}s (switching to speakers)"
                     # NOTE: --mute is handled inside the binary right after the
                     # CoreAudio switch. Doing it externally via osascript races
                     # with the output device change and can mute the headphones.
