@@ -120,6 +120,20 @@ while true; do
         date +%s > "$STATE_FILE"
     fi
 
+    # NOTE: When BT is disconnected, bt-kill-a2dp --is-active (above) can't
+    # detect audio — it only checks connected BT devices. pmset assertions
+    # don't fire for many apps/browsers. Fall back to nowplaying-cli when
+    # we're in a released/disconnected state and haven't detected audio yet.
+    # False positives (paused video tab with playbackRate=1) just mean we
+    # reconnect eagerly — that's the better failure mode vs. never reconnecting.
+    if [ "$AUDIO_PLAYING" -eq 0 ] && { [ -f "$RELEASED_FILE" ] || [ -f "$DISCONNECTED_FILE" ]; }; then
+        PLAYBACK_RATE=$(nowplaying-cli get playbackRate 2>/dev/null)
+        if [ "$PLAYBACK_RATE" = "1" ]; then
+            AUDIO_PLAYING=1
+            date +%s > "$STATE_FILE"
+        fi
+    fi
+
     LAST_PLAYING=$(cat "$STATE_FILE" 2>/dev/null || date +%s)
     NOW=$(date +%s)
     IDLE_SECS=$((NOW - LAST_PLAYING))
@@ -191,6 +205,17 @@ while true; do
                     # NOTE: Give macOS a moment to establish BT audio profile
                     sleep 3
                 fi
+                # NOTE: Verify the connect actually succeeded before switching
+                # output and cleaning up state files. If it failed (headphones
+                # out of range, connected to phone, BT profile timeout), we
+                # must keep the state files so the next poll retries. Without
+                # this check, a failed connect cleaned up state and the script
+                # forgot it needed to reconnect — headphones stayed disconnected.
+                CONNECT_OK=$(blueutil --is-connected "$RESTORE_ADDR" 2>/dev/null)
+                if [ "$CONNECT_OK" != "1" ]; then
+                    log "Reconnect to '$RESTORE_NAME' failed — will retry next poll"
+                    continue
+                fi
             fi
 
             log "Switching output to '$RESTORE_NAME' — $RESTORE_REASON"
@@ -236,6 +261,12 @@ while true; do
                     # CoreAudio switch. Doing it externally via osascript races
                     # with the output device change and can mute the headphones.
                     "$HOME/.local/bin/bt-kill-a2dp" "$addr" --speakers "$BUILTIN_SPEAKERS" --mute $FORCE_FLAG >> "$LOG_FILE" 2>&1
+                    # NOTE: Belt-and-suspenders mute AFTER bt-kill-a2dp returns.
+                    # At this point output is already on speakers, so osascript
+                    # will mute speakers (not headphones). Catches cases where
+                    # bt-kill-a2dp's internal --mute didn't take effect (e.g.
+                    # --force disconnected BT before the mute could apply).
+                    osascript -e 'set volume output volume 0' 2>/dev/null
                 fi
             done
         fi
