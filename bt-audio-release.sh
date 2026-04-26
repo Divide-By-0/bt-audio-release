@@ -23,6 +23,7 @@ RELEASED_FILE="/tmp/bt-audio-release-released"
 DISCONNECTED_FILE="/tmp/bt-audio-release-disconnected"
 LOG_FILE="$HOME/.local/bt-audio-release.log"
 BUILTIN_SPEAKERS="MacBook Air Speakers"
+PREV_OUTPUT=""
 
 # Ensure log directory exists
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -54,6 +55,19 @@ for d in devices:
             echo "$addr|$name"
         fi
     done
+}
+
+is_connected_bt_audio_output() {
+    # Returns success when the provided output name is a connected BT audio device.
+    local output="$1"
+    local connected
+    [ -z "$output" ] && return 1
+    connected=$(get_connected_audio_devices)
+    [ -z "$connected" ] && return 1
+    while IFS='|' read -r _ name; do
+        [ "$output" = "$name" ] && return 0
+    done <<< "$connected"
+    return 1
 }
 
 # PATH setup for Homebrew binaries (LaunchAgents don't inherit shell PATH)
@@ -88,6 +102,12 @@ while true; do
     if ioreg -r -k AppleClamshellState -d 4 2>/dev/null | grep -q '"AppleClamshellState" = Yes'; then
         LID_CLOSED=1
     fi
+
+    # --- Get audio output state ---
+    # NOTE: get_connected_audio_devices uses AUDIO_OUTPUTS to filter paired BT
+    # devices down to audio outputs, so refresh this before any BT audio checks.
+    AUDIO_OUTPUTS=$(SwitchAudioSource -a -t output 2>/dev/null)
+    CURRENT_OUTPUT=$(SwitchAudioSource -c -t output 2>/dev/null)
 
     # --- Check if audio is actually playing ---
     # NOTE: We check CoreAudio directly (via bt-kill-a2dp --is-active) instead
@@ -147,9 +167,23 @@ while true; do
         IDLE_STREAK=$((IDLE_STREAK + 1))
     fi
 
-    # --- Get list of audio output device names (used by is_audio_device) ---
-    AUDIO_OUTPUTS=$(SwitchAudioSource -a -t output 2>/dev/null)
-    CURRENT_OUTPUT=$(SwitchAudioSource -c -t output 2>/dev/null)
+    CURRENT_OUTPUT_IS_BT=0
+    if is_connected_bt_audio_output "$CURRENT_OUTPUT"; then
+        CURRENT_OUTPUT_IS_BT=1
+    fi
+
+    # If the user manually switches output back to the headphones while the
+    # machine is already past the idle threshold, don't immediately undo them
+    # on the next poll. Treat the manual output change as fresh activity.
+    if [ -n "$PREV_OUTPUT" ] && [ "$CURRENT_OUTPUT" != "$PREV_OUTPUT" ] && [ "$CURRENT_OUTPUT_IS_BT" -eq 1 ]; then
+        date +%s > "$STATE_FILE"
+        LAST_PLAYING=$(cat "$STATE_FILE" 2>/dev/null || date +%s)
+        NOW=$(date +%s)
+        IDLE_SECS=$((NOW - LAST_PLAYING))
+        IDLE_STREAK=0
+        log "Detected output switch to '$CURRENT_OUTPUT'; resetting idle timer"
+    fi
+    PREV_OUTPUT="$CURRENT_OUTPUT"
 
     # Periodic status line so `tail -f` shows what's happening
     if [ "$AUDIO_PLAYING" -eq 1 ]; then
@@ -198,11 +232,14 @@ while true; do
         SAVED_VOL=$(cat "$RESTORE_FILE" 2>/dev/null | head -1 | cut -d'|' -f3)
 
         if [ -n "$RESTORE_ADDR" ]; then
+            OUTPUT_BEFORE_RECONNECT=$(SwitchAudioSource -c -t output 2>/dev/null)
+            DID_BT_RECONNECT=0
             if [ "$NEEDS_BT_RECONNECT" -eq 1 ]; then
                 ALREADY_CONNECTED=$(blueutil --is-connected "$RESTORE_ADDR" 2>/dev/null)
                 if [ "$ALREADY_CONNECTED" != "1" ]; then
                     log "Auto-reconnecting '$RESTORE_NAME' ($RESTORE_ADDR) — $RESTORE_REASON"
                     blueutil --connect "$RESTORE_ADDR" 2>/dev/null
+                    DID_BT_RECONNECT=1
                     # NOTE: Give macOS a moment to establish BT audio profile
                     sleep 3
                 fi
@@ -228,12 +265,14 @@ while true; do
                 fi
             else
                 CURRENT_OUTPUT_AFTER_RECONNECT=$(SwitchAudioSource -c -t output 2>/dev/null)
-                if [ "$CURRENT_OUTPUT_AFTER_RECONNECT" = "$RESTORE_NAME" ]; then
-                    log "Keeping output on '$BUILTIN_SPEAKERS' after reconnecting '$RESTORE_NAME' - $RESTORE_REASON"
-                    SwitchAudioSource -s "$BUILTIN_SPEAKERS" -t output 2>/dev/null
-                    osascript -e 'set volume output volume 0' 2>/dev/null
+                if [ "$DID_BT_RECONNECT" -eq 1 ] && [ -n "$OUTPUT_BEFORE_RECONNECT" ] && [ "$OUTPUT_BEFORE_RECONNECT" != "$RESTORE_NAME" ] && [ "$CURRENT_OUTPUT_AFTER_RECONNECT" = "$RESTORE_NAME" ]; then
+                    log "Reconnected '$RESTORE_NAME' but preserving prior output '$OUTPUT_BEFORE_RECONNECT' - $RESTORE_REASON"
+                    SwitchAudioSource -s "$OUTPUT_BEFORE_RECONNECT" -t output 2>/dev/null
+                    if [ "$OUTPUT_BEFORE_RECONNECT" = "$BUILTIN_SPEAKERS" ]; then
+                        osascript -e 'set volume output volume 0' 2>/dev/null
+                    fi
                 else
-                    log "Reconnected '$RESTORE_NAME' without switching output - $RESTORE_REASON"
+                    log "Leaving output on '$CURRENT_OUTPUT_AFTER_RECONNECT' after reconnect check for '$RESTORE_NAME' - $RESTORE_REASON"
                 fi
             fi
             rm -f "$RELEASED_FILE" "$DISCONNECTED_FILE"

@@ -1,17 +1,18 @@
 # bt-audio-release
 
-Auto-disconnect Bluetooth headphones from your Mac when idle, so other devices (phone, iPad, etc.) can use them. Auto-reconnect when you start playing audio again or open the lid.
+Auto-disconnect Bluetooth headphones from your Mac when idle, so other devices (phone, iPad, etc.) can use them. Reconnect the BT link when you start playing audio again or open the lid, without switching Mac output back to the headphones unless configured to do so.
 
 I use this with my Bose NC 700 headphones. They don't support multipoint audio (only one device can stream A2DP at a time), so when connected to my MacBook, my phone can't use them — even if nothing is playing on the Mac. The Mac holds the audio stream open indefinitely. This script fixes that.
 
 ## What it does
 
-- **Releases BT audio** after `IDLE_TIMEOUT` seconds of silence (default 120s). With `BT_FORCE_RELEASE=1` (default) it fully disconnects BT so multipoint-free headphones can route to the phone. Otherwise it just switches the Mac's output to speakers (which only sends AVDTP SUSPEND; the A2DP transport stays allocated, which isn't enough for most multipoint-free headphones).
+- **Releases BT audio** after `BT_AUDIO_IDLE_TIMEOUT` seconds of silence (default 300s). It switches the Mac's output to speakers, briefly disconnects/reconnects the headphones to free the A2DP profile, then keeps speakers selected.
 - **Disconnects immediately** when the lid is closed.
 - **Mutes the laptop speakers** on release, so nothing blasts unexpectedly.
-- **Auto-reconnects** when audio starts playing or the lid is reopened. Verifies the reconnect actually succeeded and retries on the next poll if it didn't.
-- **Restores volume** to what it was before release.
+- **Auto-reconnects** the BT link when audio starts playing or the lid is reopened. Verifies the reconnect actually succeeded and retries on the next poll if it didn't.
+- **Keeps current output by default** after reconnect. Set `BT_AUDIO_AUTO_SWITCH_TO_BT_ON_ACTIVITY=1` to switch output back to the headphones and restore the saved volume when activity resumes.
 - **Two consecutive idle polls required** before releasing, so a single missed audio-detection poll can't trip a release right as `IDLE_SECS` tips past `IDLE_TIMEOUT`.
+- **Manual headphone output switches reset the idle timer**, so choosing the headphones by hand is not immediately undone by an old idle timestamp.
 - Runs as a background LaunchAgent (starts on login, auto-restarts if killed).
 
 ## Audio-playback detection
@@ -47,13 +48,16 @@ bash uninstall.sh
 
 ## Configuration
 
-Edit `~/.local/bin/bt-audio-release.sh` (the installed copy, not the one in this repo) and then restart the daemon:
+Set environment variables in the LaunchAgent, or edit `~/.local/bin/bt-audio-release.sh` (the installed copy, not the one in this repo) and then restart the daemon:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `IDLE_TIMEOUT` | `120` | Seconds of silence before releasing. |
-| `POLL_INTERVAL` | `15` | Seconds between checks. |
-| `BT_FORCE_RELEASE` | `1` | `1` = fully disconnect BT on release (needed for multipoint-free headphones). `0` = just switch Mac's output to speakers. |
+| `BT_AUDIO_IDLE_TIMEOUT` | `300` | Seconds of silence before releasing. |
+| `BT_AUDIO_POLL_INTERVAL` | `15` | Seconds between checks. |
+| `BT_AUDIO_IDLE_POLLS_BEFORE_RELEASE` | `2` | Consecutive idle polls required before release. |
+| `BT_AUDIO_IDLE_RECONNECT_DELAY` | `2` | Seconds to wait between idle disconnect and reconnect. |
+| `BT_AUDIO_IDLE_RECONNECT_SETTLE` | `4` | Seconds to wait after reconnect before checking whether macOS switched output back. |
+| `BT_AUDIO_AUTO_SWITCH_TO_BT_ON_ACTIVITY` | `0` | `1` = switch output back to headphones and restore volume when audio/lid-open activity resumes. `0` = reconnect BT but preserve current output. |
 | `BUILTIN_SPEAKERS` | `MacBook Air Speakers` | Exact name of the built-in speaker output as it appears in `SwitchAudioSource -a -t output`. Change this if you're on a MacBook Pro. |
 
 ## Finding and managing the running daemon
@@ -68,8 +72,8 @@ Edit `~/.local/bin/bt-audio-release.sh` (the installed copy, not the one in this
 | `~/.local/bt-audio-release.log` | Main log (tail this to debug). |
 | `~/.local/bt-audio-release-stderr.log` | Stderr from the LaunchAgent. |
 | `/tmp/bt-audio-release-last-playing` | Unix timestamp of the last detected audio activity. |
-| `/tmp/bt-audio-release-released` | `addr\|name\|vol` of a device whose output was switched away (BT still connected; only written when `BT_FORCE_RELEASE=0`). |
-| `/tmp/bt-audio-release-disconnected` | `addr\|name\|vol` of a device that was fully disconnected (on lid-close, or on idle-release when `BT_FORCE_RELEASE=1`). |
+| `/tmp/bt-audio-release-released` | `addr\|name\|vol` of a device whose output was switched away while BT stayed connected. |
+| `/tmp/bt-audio-release-disconnected` | `addr\|name\|vol` of a device that was disconnected on lid-close, or during an idle release before reconnect succeeds. |
 | `/tmp/bt-audio-release-playing` | Ephemeral signal file used to smuggle the audio-playing result out of a piped while-loop subshell. |
 
 ### LaunchAgent label
@@ -129,6 +133,8 @@ In chronological order, so someone reading the log/git history can find the comm
 5. **Fix: speakers not muted on release.** Added an explicit `osascript -e 'set volume output volume 0'` after `bt-kill-a2dp` returns. `bt-kill-a2dp --mute` handles it internally, but with `--force` it can disconnect BT before the mute applies. The post-call osascript is safe because the output has already been switched to speakers — we're muting speakers, not headphones.
 6. **Fix: failed reconnects never retried.** After `blueutil --connect`, the script now verifies with `blueutil --is-connected`. If the connect failed (headphones out of range, connected to phone, BT profile timeout), it `continue`s without cleaning up state files, so the next poll tries again.
 7. **Fix: audio undetected when BT is disconnected.** The primary CoreAudio check only works on *connected* BT devices. Once BT is disconnected, `pmset` assertions were the only signal, and they don't fire for many apps/browsers. Added a `nowplaying-cli get playbackRate` fallback — only consulted when a state file exists, so false positives just cause eager reconnects rather than preventing releases.
+8. **Changed idle release to a disconnect/reconnect bounce.** The idle path now frees the A2DP profile, reconnects the BT link, and leaves Mac output on muted speakers by default. This lets the headphones remain connected while staying available to another device for audio.
+9. **Fix: manual headphone selection being undone.** Switching output to the headphones by hand now resets the idle timer, and the reconnect path only preserves a prior non-BT output when this daemon actually initiated the reconnect.
 
 ## Known issues / open questions
 
@@ -138,7 +144,7 @@ These are things I haven't tracked down yet. If you're Claude working on this, *
    - Some audio sources don't even trigger `nowplaying-cli playbackRate=1`. Possibly silent system notifications, WebRTC streams without a media session, or apps that bypass all three detection channels.
    - `blueutil --connect` may succeed at the LE link level but fail to establish the A2DP profile, and `blueutil --is-connected` might still return `1` in that state. Worth logging `blueutil --info` of the device on failed-sounding restores.
    - If the daemon was killed/restarted while the state files existed, startup clears them (line ~73: `rm -f "$RELEASED_FILE" "$DISCONNECTED_FILE"`). Anything in-flight is forgotten.
-2. **Unexplained early disconnect: <20s of silence sometimes triggers a release.** I've had cases where audio stops, I'm about to play something else maybe 15–20s later, and the headphones are already disconnected. This *shouldn't* be possible given `IDLE_TIMEOUT=120` and the `IDLE_STREAK >= 2` guard — `IDLE_SECS` is computed from `STATE_FILE`'s timestamp, not from the streak. Candidate causes to investigate:
+2. **Unexplained early disconnect: <20s of silence sometimes triggers a release.** I've had cases where audio stops, I'm about to play something else maybe 15–20s later, and the headphones are already disconnected. This *shouldn't* be possible given `BT_AUDIO_IDLE_TIMEOUT=300` and the `IDLE_STREAK >= 2` guard — `IDLE_SECS` is computed from `STATE_FILE`'s timestamp, not from the streak. Candidate causes to investigate:
    - Is the `date +%s > "$STATE_FILE"` inside the piped-while subshell (line ~104) actually landing reliably? File I/O should cross subshells, but if the subshell hits an error before the redirect completes, `STATE_FILE` would stay stale.
    - Is `bt-kill-a2dp --is-active` returning false during active playback for some apps? (E.g., brief IO gaps during video silence that last a full poll interval.)
    - Is something else — macOS itself, or bt-kill-a2dp's `--force` interacting with the phone's BT stack — causing the headphones to drop, and the daemon is blameless?
