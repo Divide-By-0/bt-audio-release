@@ -175,6 +175,28 @@ func usage() -> Never {
     exit(1)
 }
 
+// Keep daemon Bluetooth operations in the native helper rather than a separate
+// blueutil process, which can hang before returning from a LaunchAgent.
+if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--paired" {
+    let devices = (IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice]) ?? []
+    let rows: [[String: Any]] = devices.compactMap { device in
+        guard let address = device.addressString, let name = device.name else { return nil }
+        return ["address": address, "name": name, "connected": device.isConnected()]
+    }
+    guard let data = try? JSONSerialization.data(withJSONObject: rows),
+          let output = String(data: data, encoding: .utf8) else { exit(2) }
+    print(output)
+    exit(0)
+}
+if CommandLine.arguments.count == 3 && ["--is-connected", "--connect", "--disconnect"].contains(CommandLine.arguments[1]) {
+    guard let device = IOBluetoothDevice(addressString: CommandLine.arguments[2]) else { exit(2) }
+    switch CommandLine.arguments[1] {
+    case "--is-connected": print(device.isConnected() ? "1" : "0"); exit(0)
+    case "--connect": exit(device.openConnection() == kIOReturnSuccess ? 0 : 2)
+    default: exit(device.closeConnection() == kIOReturnSuccess ? 0 : 2)
+    }
+}
+
 var macAddress = ""
 var speakerName: String? = nil
 var releaseInput = false

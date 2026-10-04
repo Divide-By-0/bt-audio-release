@@ -70,7 +70,7 @@ class Daemon:
         if '"AppleClamshellState" = Yes' not in lid and '"AppleClamshellState" = No' not in lid:
             raise RuntimeError("lid state unavailable")
         closed = '"AppleClamshellState" = Yes' in lid
-        devices = json.loads(self.read("blueutil", "--paired", "--format", "json"))
+        devices = json.loads(self.read(self.helper, "--paired"))
         outputs = self.read("SwitchAudioSource", "-a", "-t", "output").splitlines()
         inputs = self.read("SwitchAudioSource", "-a", "-t", "input").splitlines()
         audio_names = set(outputs + inputs)
@@ -88,11 +88,11 @@ class Daemon:
         if rc != 0:
             LOG.warning("release skipped: %s reason=%s route switch failed", name, reason)
             return False
-        rc, _ = self.run("blueutil", "--disconnect", addr)
+        rc, _ = self.run(self.helper, "--disconnect", addr)
         if rc != 0:
             LOG.warning("disconnect failed: %s reason=%s", name, reason)
             return False
-        rc, connected = self.run("blueutil", "--is-connected", addr)
+        rc, connected = self.run(self.helper, "--is-connected", addr)
         if rc != 0 or connected != "0":
             LOG.warning("disconnect unverified: %s reason=%s", name, reason)
             return False
@@ -104,7 +104,7 @@ class Daemon:
         owned, self.lid_owned = self.lid_owned, {}
         self.save()
         for addr, name in owned.items():
-            rc, connected = self.run("blueutil", "--is-connected", addr)
+            rc, connected = self.run(self.helper, "--is-connected", addr)
             if rc != 0:
                 LOG.warning("lid restore skipped: %s connection state unknown", name)
                 continue
@@ -114,11 +114,11 @@ class Daemon:
             if connected != "0":
                 continue
             output = self.read("SwitchAudioSource", "-c", "-t", "output")
-            rc, _ = self.run("blueutil", "--connect", addr)
+            rc, _ = self.run(self.helper, "--connect", addr)
             if rc != 0:
                 LOG.warning("lid restore failed: %s; no automatic retry", name)
                 continue
-            rc, connected = self.run("blueutil", "--is-connected", addr)
+            rc, connected = self.run(self.helper, "--is-connected", addr)
             if rc != 0 or connected != "1":
                 LOG.warning("lid restore unverified: %s; no automatic retry", name)
                 continue

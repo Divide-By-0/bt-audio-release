@@ -23,7 +23,7 @@ class Fake:
         self.calls.append(args)
         if args[0] == 'ioreg':
             return 0, '"AppleClamshellState" = ' + ('Yes' if self.closed else 'No')
-        if args[0] == 'blueutil':
+        if any(flag in args for flag in ('--paired', '--is-connected', '--disconnect', '--connect')):
             if '--paired' in args:
                 return 0, '[{"name":"Headset", "address":"aa-bb", "connected":%s}]' % str(self.connected).lower()
             if '--is-connected' in args:

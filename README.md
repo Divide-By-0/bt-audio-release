@@ -9,7 +9,7 @@ Release idle Bluetooth headphones so a phone can use them without the Mac repeat
 - When the lid opens, make one reconnect attempt for each device this daemon disconnected **because the lid closed**. Keep the prior Mac output and built-in microphone. Notifications and playback never trigger a reconnect.
 - Manual disconnections and idle releases do not create lid-open reconnect claims. Claims survive a daemon restart for up to 24 hours.
 - Built-in audio devices are detected by CoreAudio transport type, so migration between MacBook Air and Pro does not depend on their names.
-- Every external command has an eight-second deadline, including child processes. Unknown activity or failed routing checks leave the headset connected and log the failure.
+- Every external command has an eight-second deadline, including child processes. Bluetooth discovery and connection operations use the native helper. Unknown activity or failed routing checks leave the headset connected and log the failure.
 - A process lock prevents duplicate daemons. Logs rotate at 1 MB with three backups.
 
 This changes the automation's behavior; it cannot prevent macOS, another application, or another paired device from requesting a headset independently. Mac Bluetooth/CoreAudio logs can identify those requests.
@@ -20,7 +20,7 @@ This changes the automation's behavior; it cannot prevent macOS, another applica
 bash install.sh
 ```
 
-Requires Homebrew, Python 3, blueutil, switchaudio-osx and Swift. The installer builds the native helper, installs both daemon files, retires the migrated `com.aayush.bt-audio-release` job, and loads the canonical `com.user.bt-audio-release` job. `bash uninstall.sh` removes the canonical startup job.
+Requires Homebrew, Python 3, switchaudio-osx and Swift. The installer builds the native helper, installs both daemon files, retires the migrated `com.aayush.bt-audio-release` job, and loads the canonical `com.user.bt-audio-release` job. `bash uninstall.sh` removes the canonical startup job.
 
 ## Configuration and diagnostics
 
