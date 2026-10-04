@@ -7,6 +7,7 @@ set -e
 echo "Installing dependencies..."
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 missing=()
+command -v blueutil >/dev/null || missing+=(blueutil)
 command -v SwitchAudioSource >/dev/null || missing+=(switchaudio-osx)
 command -v python3 >/dev/null || missing+=(python3)
 if [ "${#missing[@]}" -gt 0 ]; then

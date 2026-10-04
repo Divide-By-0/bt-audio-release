@@ -85,6 +85,18 @@ class Daemon:
         connected = [d for d in devices if d.get("connected") and d.get("name") in audio_names]
         return closed, connected
 
+    def wait_connection(self, addr, expected):
+        deadline = time.monotonic() + 3
+        while True:
+            rc, connected = self.run(self.helper, "--is-connected", addr)
+            if rc != 0:
+                return False
+            if connected == expected:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(.2)
+
     def release(self, device, reason):
         addr, name = device["address"], device["name"]
         # Native helper chooses built-in transport, switches input if this headset
@@ -96,12 +108,11 @@ class Daemon:
         if rc != 0:
             LOG.warning("release skipped: %s reason=%s route switch failed", name, reason)
             return False
-        rc, _ = self.run(self.helper, "--disconnect", addr)
+        rc, _ = self.run("blueutil", "--disconnect", addr)
         if rc != 0:
             LOG.warning("disconnect failed: %s reason=%s", name, reason)
             return False
-        rc, connected = self.run(self.helper, "--is-connected", addr)
-        if rc != 0 or connected != "0":
+        if not self.wait_connection(addr, "0"):
             LOG.warning("disconnect unverified: %s reason=%s", name, reason)
             return False
         LOG.info("released: %s reason=%s %s", name, reason, detail.replace("\n", "; "))
@@ -122,12 +133,11 @@ class Daemon:
             if connected != "0":
                 continue
             output = self.read("SwitchAudioSource", "-c", "-t", "output")
-            rc, _ = self.run(self.helper, "--connect", addr)
+            rc, _ = self.run("blueutil", "--connect", addr)
             if rc != 0:
                 LOG.warning("lid restore failed: %s; no automatic retry", name)
                 continue
-            rc, connected = self.run(self.helper, "--is-connected", addr)
-            if rc != 0 or connected != "1":
+            if not self.wait_connection(addr, "1"):
                 LOG.warning("lid restore unverified: %s; no automatic retry", name)
                 continue
             # macOS may automatically make a reconnected headset the default.
