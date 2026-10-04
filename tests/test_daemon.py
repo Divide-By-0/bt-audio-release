@@ -17,6 +17,7 @@ class Fake:
         self.connected = True
         self.active = 1
         self.fail_switch = False
+        self.fail_connect = False
         self.calls = []
     def __call__(self, *args):
         self.calls.append(args)
@@ -30,6 +31,8 @@ class Fake:
             if '--disconnect' in args:
                 self.connected = False
             if '--connect' in args:
+                if self.fail_connect:
+                    return 2, ''
                 self.connected = True
             return 0, ''
         if args[0] == 'SwitchAudioSource':
@@ -64,6 +67,15 @@ class PolicyTests(unittest.TestCase):
         self.assertFalse(self.fake.connected)
         self.fake.closed = False
         self.daemon.poll()
+        self.daemon.poll()
+        self.assertEqual(len(self.fake.connects()), 1)
+    def test_failed_lid_reconnect_is_not_retried_by_audio(self):
+        self.fake.closed = True
+        self.daemon.poll()
+        self.fake.closed = False
+        self.fake.fail_connect = True
+        self.daemon.poll()
+        self.fake.active = 0
         self.daemon.poll()
         self.assertEqual(len(self.fake.connects()), 1)
     def test_manual_disconnect_never_claimed(self):

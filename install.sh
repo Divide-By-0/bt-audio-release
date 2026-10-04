@@ -5,7 +5,14 @@
 set -e
 
 echo "Installing dependencies..."
-brew install blueutil switchaudio-osx python3
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+missing=()
+command -v blueutil >/dev/null || missing+=(blueutil)
+command -v SwitchAudioSource >/dev/null || missing+=(switchaudio-osx)
+command -v python3 >/dev/null || missing+=(python3)
+if [ "${#missing[@]}" -gt 0 ]; then
+    brew install "${missing[@]}"
+fi
 
 echo "Building bt-kill-a2dp (Swift CLI)..."
 cd bt-kill-a2dp && swift build -c release && cd ..
