@@ -20,7 +20,7 @@ This changes the automation's behavior; it cannot prevent macOS, another applica
 bash install.sh
 ```
 
-Requires Homebrew, Python 3, switchaudio-osx and Swift. The installer builds the native helper, installs both daemon files, retires the migrated `com.aayush.bt-audio-release` job, and loads the canonical `com.user.bt-audio-release` job. `bash uninstall.sh` removes the canonical startup job.
+Requires Homebrew, Python 3, switchaudio-osx and Swift. The native helper remains the responsible startup process, using its existing macOS Bluetooth permission rather than requesting it for the Python interpreter. On a fresh install, allow the helper Bluetooth access when macOS asks. The installer builds the native helper, installs both daemon files, retires the migrated `com.aayush.bt-audio-release` job, and loads the canonical `com.user.bt-audio-release` job. `bash uninstall.sh` removes the canonical startup job.
 
 ## Configuration and diagnostics
 

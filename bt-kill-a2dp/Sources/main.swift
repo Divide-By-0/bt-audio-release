@@ -175,6 +175,22 @@ func usage() -> Never {
     exit(1)
 }
 
+// The approved native Bluetooth helper owns the background job and its child.
+// Keep it alive as the responsible process; do not request broad Bluetooth
+// permission for the Python interpreter merely to implement the policy loop.
+if CommandLine.arguments.count >= 2 && CommandLine.arguments[1] == "--daemon" {
+    let directory = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    child.arguments = ["python3", directory.appendingPathComponent("bt-audio-release.py").path] + Array(CommandLine.arguments.dropFirst(2))
+    do { try child.run() } catch {
+        fputs("Error: cannot start policy daemon: \(error)\n", stderr)
+        exit(2)
+    }
+    child.waitUntilExit()
+    exit(child.terminationStatus)
+}
+
 // Keep daemon Bluetooth operations in the native helper rather than a separate
 // blueutil process, which can hang before returning from a LaunchAgent.
 if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--paired" {
