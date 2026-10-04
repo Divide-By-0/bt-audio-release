@@ -1,11 +1,11 @@
 #!/bin/bash
 # Install bt-audio-release: auto-disconnect BT headphones when idle,
-# auto-reconnect when lid opens.
+# restore only headphones disconnected by lid closing.
 
 set -e
 
 echo "Installing dependencies..."
-brew install blueutil nowplaying-cli switchaudio-osx 2>/dev/null || true
+brew install blueutil switchaudio-osx python3
 
 echo "Building bt-kill-a2dp (Swift CLI)..."
 cd bt-kill-a2dp && swift build -c release && cd ..
@@ -14,7 +14,7 @@ cp bt-kill-a2dp/.build/release/bt-kill-a2dp ~/.local/bin/bt-kill-a2dp
 chmod +x ~/.local/bin/bt-kill-a2dp
 
 echo "Installing script..."
-cp bt-audio-release.sh ~/.local/bin/bt-audio-release.sh
+cp bt-audio-release.sh bt-audio-release.py ~/.local/bin/
 chmod +x ~/.local/bin/bt-audio-release.sh
 
 echo "Installing LaunchAgent..."
@@ -23,8 +23,15 @@ echo "Installing LaunchAgent..."
 sed "s|HOMEDIR|$HOME|g" com.user.bt-audio-release.plist > ~/Library/LaunchAgents/com.user.bt-audio-release.plist
 
 echo "Loading LaunchAgent..."
-launchctl unload ~/Library/LaunchAgents/com.user.bt-audio-release.plist 2>/dev/null || true
-launchctl load ~/Library/LaunchAgents/com.user.bt-audio-release.plist
+# The migrated Air installation used a different label. Do not run both.
+for label in com.aayush.bt-audio-release com.user.bt-audio-release; do
+    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+done
+if [ -f ~/Library/LaunchAgents/com.aayush.bt-audio-release.plist ]; then
+    mv ~/Library/LaunchAgents/com.aayush.bt-audio-release.plist \
+       ~/Library/LaunchAgents/com.aayush.bt-audio-release.plist.disabled
+fi
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.user.bt-audio-release.plist
 
 echo "Done! Logs at ~/.local/bt-audio-release.log"
 echo "To uninstall: bash uninstall.sh"
