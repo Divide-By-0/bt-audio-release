@@ -1,4 +1,6 @@
 import importlib.util
+import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -109,6 +111,37 @@ class PolicyTests(unittest.TestCase):
         self.daemon.poll()
         self.daemon.poll()
         self.assertEqual(self.fake.connects(), [])
+    def test_policy_exits_when_host_is_stopped(self):
+        module_path = str(Path(__file__).parents[1] / 'bt-audio-release.py')
+        child_code = "import importlib.util; s=importlib.util.spec_from_file_location('bt',%r); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.Daemon.poll=lambda self: None; m.main()" % module_path
+        host_code = "import subprocess,sys,time; p=subprocess.Popen([sys.executable,'-c',%r],stdout=subprocess.DEVNULL); print(p.pid,flush=True); time.sleep(30)" % child_code
+        env = dict(os.environ, HOME=self.temp.name)
+        host = subprocess.Popen([sys.executable, '-c', host_code], stdout=subprocess.PIPE, text=True, env=env)
+        child_pid = int(host.stdout.readline())
+        try:
+            # Wait for the daemon to install its host watcher and signal handler.
+            log = Path(self.temp.name) / '.local/bt-audio-release.log'
+            deadline = time.monotonic() + 3
+            while not log.exists() or 'started:' not in log.read_text():
+                if time.monotonic() > deadline:
+                    self.fail('policy startup timed out')
+                time.sleep(.02)
+            host.terminate()
+            host.wait(timeout=2)
+            deadline = time.monotonic() + 2
+            while True:
+                status = subprocess.run(['ps', '-p', str(child_pid), '-o', 'stat='], capture_output=True, text=True).stdout.strip()
+                if not status or status.startswith('Z'):
+                    break
+                if time.monotonic() > deadline:
+                    self.fail('policy child survived its host')
+                time.sleep(.05)
+        finally:
+            if host.poll() is None:
+                host.kill(); host.wait()
+            host.stdout.close()
+            try: os.kill(child_pid, signal.SIGTERM)
+            except ProcessLookupError: pass
     def test_timeout_returns_and_kills_descendants(self):
         start = time.monotonic()
         rc, _ = m.command(sys.executable, '-c', 'import subprocess,time; subprocess.Popen(["sleep","30"]); time.sleep(30)', timeout=.1)

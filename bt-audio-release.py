@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import threading
 import time
 
 LOG = logging.getLogger("bt-audio-release")
@@ -185,7 +186,14 @@ def main():
     state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     lock = (state_dir / "daemon.lock").open("a")
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        for attempt in range(20):
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if attempt == 19:
+                    raise
+                time.sleep(.1)
     except BlockingIOError:
         raise SystemExit("bt-audio-release is already running")
     handler = RotatingFileHandler(Path.home() / ".local/bt-audio-release.log", maxBytes=1_000_000, backupCount=3)
@@ -196,6 +204,16 @@ def main():
         raise SystemExit(0)
     signal.signal(signal.SIGTERM, terminate)
     signal.signal(signal.SIGINT, terminate)
+    # Foundation Process can put its child outside launchd's process group.
+    # Exit promptly if the responsible native host is stopped or replaced.
+    host_pid = os.getppid()
+    def watch_host():
+        while True:
+            if os.getppid() != host_pid:
+                os.kill(os.getpid(), signal.SIGTERM)
+                return
+            time.sleep(.1)
+    threading.Thread(target=watch_host, daemon=True).start()
     daemon = Daemon(state_dir)
     LOG.info("started: reconnect=lid-owned-only idle_timeout=%s command_timeout=%s", daemon.idle_timeout, os.environ.get("BT_AUDIO_COMMAND_TIMEOUT", "8"))
     while True:
