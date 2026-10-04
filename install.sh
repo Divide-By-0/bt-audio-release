@@ -1,20 +1,34 @@
 #!/bin/bash
 # Install bt-audio-release: auto-disconnect BT headphones when idle,
-# auto-reconnect when lid opens.
+# restore only headphones disconnected by lid closing.
 
 set -e
 
 echo "Installing dependencies..."
-brew install blueutil nowplaying-cli switchaudio-osx 2>/dev/null || true
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+missing=()
+command -v blueutil >/dev/null || missing+=(blueutil)
+command -v SwitchAudioSource >/dev/null || missing+=(switchaudio-osx)
+command -v python3 >/dev/null || missing+=(python3)
+if [ "${#missing[@]}" -gt 0 ]; then
+    brew install "${missing[@]}"
+fi
 
 echo "Building bt-kill-a2dp (Swift CLI)..."
 cd bt-kill-a2dp && swift build -c release && cd ..
+# The migrated Air installation used a different label. Do not run both.
+for label in com.aayush.bt-audio-release com.user.bt-audio-release; do
+    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+done
 mkdir -p ~/.local/bin
-cp bt-kill-a2dp/.build/release/bt-kill-a2dp ~/.local/bin/bt-kill-a2dp
-chmod +x ~/.local/bin/bt-kill-a2dp
+# Replace the inode atomically; overwriting a signed running executable can
+# leave macOS's code-signature cache rejecting the replacement with SIGKILL.
+cp bt-kill-a2dp/.build/release/bt-kill-a2dp ~/.local/bin/bt-kill-a2dp.new
+chmod +x ~/.local/bin/bt-kill-a2dp.new
+mv -f ~/.local/bin/bt-kill-a2dp.new ~/.local/bin/bt-kill-a2dp
 
 echo "Installing script..."
-cp bt-audio-release.sh ~/.local/bin/bt-audio-release.sh
+cp bt-audio-release.sh bt-audio-release.py ~/.local/bin/
 chmod +x ~/.local/bin/bt-audio-release.sh
 
 echo "Installing LaunchAgent..."
@@ -23,8 +37,11 @@ echo "Installing LaunchAgent..."
 sed "s|HOMEDIR|$HOME|g" com.user.bt-audio-release.plist > ~/Library/LaunchAgents/com.user.bt-audio-release.plist
 
 echo "Loading LaunchAgent..."
-launchctl unload ~/Library/LaunchAgents/com.user.bt-audio-release.plist 2>/dev/null || true
-launchctl load ~/Library/LaunchAgents/com.user.bt-audio-release.plist
+if [ -f ~/Library/LaunchAgents/com.aayush.bt-audio-release.plist ]; then
+    mv ~/Library/LaunchAgents/com.aayush.bt-audio-release.plist \
+       ~/Library/LaunchAgents/com.aayush.bt-audio-release.plist.disabled
+fi
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.user.bt-audio-release.plist
 
 echo "Done! Logs at ~/.local/bt-audio-release.log"
 echo "To uninstall: bash uninstall.sh"

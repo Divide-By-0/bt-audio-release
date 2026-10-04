@@ -121,6 +121,39 @@ func isDeviceRunning(_ id: AudioDeviceID) -> Bool {
     return running != 0
 }
 
+func builtinDevice(scope: AudioObjectPropertyScope) -> AudioDeviceID? {
+    for id in getAudioDevices() {
+        var property = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var transport: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(id, &property, 0, nil, &size, &transport) == noErr,
+              transport == kAudioDeviceTransportTypeBuiltIn else { continue }
+        property.mSelector = kAudioDevicePropertyStreams
+        property.mScope = scope
+        guard AudioObjectGetPropertyDataSize(id, &property, 0, nil, &size) == noErr, size > 0 else { continue }
+        return id
+    }
+    return nil
+}
+
+func defaultDevice(_ selector: AudioObjectPropertySelector) -> AudioDeviceID {
+    var prop = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                                         mElement: kAudioObjectPropertyElementMain)
+    var id: AudioDeviceID = 0
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &prop, 0, nil, &size, &id)
+    return id
+}
+
+func setDefaultDevice(_ id: AudioDeviceID, _ selector: AudioObjectPropertySelector) -> Bool {
+    var value = id
+    var prop = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                                         mElement: kAudioObjectPropertyElementMain)
+    return AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &prop, 0, nil,
+                                     UInt32(MemoryLayout<AudioDeviceID>.size), &value) == noErr
+}
+
 // MARK: - Argument parsing
 
 func usage() -> Never {
@@ -130,7 +163,8 @@ func usage() -> Never {
     Releases the A2DP audio stream from a Bluetooth device.
 
     Options:
-      --speakers <name>   Built-in speaker name (default: "MacBook Air Speakers")
+      --speakers <name>   Speaker name override (default: detected built-in output)
+      --release-input     Move this headset microphone to built-in input
       --force             Disconnect BT entirely to guarantee A2DP release
       --mute              Mute output after switching (avoids race with external mute)
       --is-active         Exit 0 if device has active audio output, 1 if idle
@@ -141,8 +175,47 @@ func usage() -> Never {
     exit(1)
 }
 
+// The approved native Bluetooth helper owns the background job and its child.
+// Keep it alive as the responsible process; do not request broad Bluetooth
+// permission for the Python interpreter merely to implement the policy loop.
+if CommandLine.arguments.count >= 2 && CommandLine.arguments[1] == "--daemon" {
+    let directory = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    child.arguments = ["python3", directory.appendingPathComponent("bt-audio-release.py").path] + Array(CommandLine.arguments.dropFirst(2))
+    do { try child.run() } catch {
+        fputs("Error: cannot start policy daemon: \(error)\n", stderr)
+        exit(2)
+    }
+    child.waitUntilExit()
+    exit(child.terminationStatus)
+}
+
+// Keep daemon Bluetooth operations in the native helper rather than a separate
+// blueutil process, which can hang before returning from a LaunchAgent.
+if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--paired" {
+    let devices = (IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice]) ?? []
+    let rows: [[String: Any]] = devices.compactMap { device in
+        guard let address = device.addressString, let name = device.name else { return nil }
+        return ["address": address, "name": name, "connected": device.isConnected()]
+    }
+    guard let data = try? JSONSerialization.data(withJSONObject: rows),
+          let output = String(data: data, encoding: .utf8) else { exit(2) }
+    print(output)
+    exit(0)
+}
+if CommandLine.arguments.count == 3 && ["--is-connected", "--connect", "--disconnect"].contains(CommandLine.arguments[1]) {
+    guard let device = IOBluetoothDevice(addressString: CommandLine.arguments[2]) else { exit(2) }
+    switch CommandLine.arguments[1] {
+    case "--is-connected": print(device.isConnected() ? "1" : "0"); exit(0)
+    case "--connect": exit(device.openConnection() == kIOReturnSuccess ? 0 : 2)
+    default: exit(device.closeConnection() == kIOReturnSuccess ? 0 : 2)
+    }
+}
+
 var macAddress = ""
-var speakerName = "MacBook Air Speakers"
+var speakerName: String? = nil
+var releaseInput = false
 var force = false
 var muteAfterSwitch = false
 var checkActive = false
@@ -164,6 +237,7 @@ do {
                 exit(1)
             }
             speakerName = args[i]
+        case "--release-input": releaseInput = true
         case "--force":     force = true
         case "--mute":      muteAfterSwitch = true
         case "--is-active": checkActive = true
@@ -191,6 +265,8 @@ let btRunning = btAudioID.map { isDeviceRunning($0) } ?? false
 // MARK: - Status mode
 
 if statusOnly {
+    print("Built-in output: \(builtinDevice(scope: kAudioObjectPropertyScopeOutput).flatMap { deviceName($0) } ?? "unavailable")")
+    print("Built-in input:  \(builtinDevice(scope: kAudioObjectPropertyScopeInput).flatMap { deviceName($0) } ?? "unavailable")")
     print("Device:          \(btName) (\(macAddress))")
     print("BT connected:    \(btConnected)")
     print("Audio device:    \(btAudioID != nil ? "found" : "not found")")
@@ -209,15 +285,17 @@ if statusOnly {
 if checkActive {
     if btAudioID != nil, btRunning {
         exit(0)  // active
+    } else if btAudioID != nil {
+        exit(1)  // verified idle
     } else {
-        exit(1)  // idle (or device not found)
+        exit(2)  // missing device is unknown, not idle
     }
 }
 
 // MARK: - Step 1: Switch output to speakers
 
-guard let speakerID = findOutputDevice(named: speakerName) else {
-    fputs("Error: speaker device '\(speakerName)' not found\n", stderr)
+guard let speakerID = speakerName.flatMap({ findOutputDevice(named: $0) }) ?? (speakerName == nil ? builtinDevice(scope: kAudioObjectPropertyScopeOutput) : nil) else {
+    fputs("Error: speaker device '\(speakerName ?? "built-in output")' not found\n", stderr)
     fputs("Available output devices:\n", stderr)
     for id in getAudioDevices() where isOutputDevice(id) {
         if let n = deviceName(id) { fputs("  - \(n)\n", stderr) }
@@ -225,12 +303,27 @@ guard let speakerID = findOutputDevice(named: speakerName) else {
     exit(2)
 }
 
+let selectedSpeakerName = deviceName(speakerID) ?? "built-in output"
+if releaseInput && deviceName(defaultDevice(kAudioHardwarePropertyDefaultInputDevice)) == btName {
+    guard let inputID = builtinDevice(scope: kAudioObjectPropertyScopeInput),
+          setDefaultDevice(inputID, kAudioHardwarePropertyDefaultInputDevice) else {
+        fputs("Error: cannot release headset microphone safely\n", stderr)
+        exit(2)
+    }
+    print("Released headset microphone to built-in input")
+}
+if deviceName(defaultDevice(kAudioHardwarePropertyDefaultSystemOutputDevice)) == btName {
+    guard setDefaultDevice(speakerID, kAudioHardwarePropertyDefaultSystemOutputDevice) else {
+        fputs("Error: cannot release system sound output\n", stderr)
+        exit(2)
+    }
+}
 if isBTDefault {
     guard setDefaultOutput(speakerID) else {
         fputs("Error: failed to switch default output\n", stderr)
         exit(1)
     }
-    print("Switched output: '\(btName)' -> '\(speakerName)'")
+    print("Switched output: '\(btName)' -> '\(selectedSpeakerName)'")
 } else {
     print("Output already on '\(curDefaultName)' (not \(btName))")
 }
