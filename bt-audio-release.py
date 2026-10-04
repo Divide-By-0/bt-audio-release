@@ -29,6 +29,13 @@ def command(*args, timeout=None):
         out, err = proc.communicate()
         LOG.warning("command timeout: %s", args[0])
         return 124, out
+    except BaseException:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
+        raise
     if proc.returncode not in (0, 1):
         LOG.warning("command failed: %s rc=%s %s", args[0], proc.returncode, err.strip()[:200])
     return proc.returncode, out.strip()
@@ -185,6 +192,10 @@ def main():
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     LOG.addHandler(handler)
     LOG.setLevel(logging.INFO)
+    def terminate(signum, frame):
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, terminate)
+    signal.signal(signal.SIGINT, terminate)
     daemon = Daemon(state_dir)
     LOG.info("started: reconnect=lid-owned-only idle_timeout=%s command_timeout=%s", daemon.idle_timeout, os.environ.get("BT_AUDIO_COMMAND_TIMEOUT", "8"))
     while True:
